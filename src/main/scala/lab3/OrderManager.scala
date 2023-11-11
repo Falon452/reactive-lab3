@@ -25,6 +25,8 @@ object OrderManager {
 
   case object ConfirmPaymentReceived extends Command
 
+  case object ConfirmCheckOutClosed extends Command
+
   sealed trait Ack
 
   case object Done extends Ack //trivial ACK
@@ -32,11 +34,24 @@ object OrderManager {
 
 class OrderManager {
 
+  private var paymentMapper: ActorRef[TypedPayment.Event] = _
+  private var typedCartMapper: ActorRef[TypedCartActor.Event] = _
+  private var typedCheckoutMapper: ActorRef[TypedCheckout.Event] = _
+
   import OrderManager._
 
   def start: Behavior[OrderManager.Command] = Behaviors.setup { context =>
     val typedCartActor = context.spawnAnonymous(new TypedCartActor().empty)
-
+    paymentMapper = context.messageAdapter[TypedPayment.Event] {
+      case TypedPayment.PaymentReceived => ConfirmPaymentReceived
+    }
+    typedCartMapper = context.messageAdapter[TypedCartActor.Event] {
+      case TypedCartActor.CheckoutStarted(checkoutRef) => ConfirmCheckoutStarted(checkoutRef)
+    }
+    typedCheckoutMapper = context.messageAdapter[TypedCheckout.Event] {
+      case TypedCheckout.PaymentStarted(paymentRef) => ConfirmPaymentStarted(paymentRef)
+      case TypedCheckout.CheckOutClosed => ConfirmCheckOutClosed
+    }
     open(cartActor = typedCartActor)
   }
 
@@ -76,7 +91,11 @@ class OrderManager {
           Behaviors.same
         case SelectPayment(paymentMethod, sender) =>
           println("OM: Select Payment")
-          checkoutActorRef ! TypedCheckout.SelectPayment(payment = paymentMethod, orderManagerRef = context.self.ref)
+          checkoutActorRef ! TypedCheckout.SelectPayment(
+            payment = paymentMethod,
+            orderManagerPaymentEventHandler = paymentMapper,
+            orderManagerCheckoutEventHandler = typedCheckoutMapper
+          )
           inPayment(senderRef = sender)
       }
     )
